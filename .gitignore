@@ -1,0 +1,5 @@
+*.o
+*.cdi
+*.elf
+Vital
+version.h
