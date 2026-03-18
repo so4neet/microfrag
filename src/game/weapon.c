@@ -27,13 +27,13 @@ const WeaponDef weapons[WEAPON_COUNT] = {
         .bodyHeight   = 0.05f,   // vertical thickness
         .barrelLength = 0.12f,
         .barrelRadius = 0.014f,
-        .fireRate     = 0.1f,
+        .fireRate     = 0.15f,
         .damage       = 10,
         .spread       = 0.0f,
         .pellets      = 8,
         .range        = 30.0f,
         .screenShake  = 0.06f,
-        .recoilPitch  = 0.03f,
+        .recoilPitch  = 0.02f,
     },
     [WEAPON_ROCKET] = {
         .name         = "Rocket Launcher",
