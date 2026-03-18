@@ -264,7 +264,7 @@ int main(int argc, char *argv[]) {
             if (isHosting)       DrawText("HOST",      10, 30, 20, GREEN);
             else if (isJoining)  DrawText("CLIENT",    10, 30, 20, SKYBLUE);
             else                 DrawText("SOLO",      10, 30, 20, GRAY);
-
+            DrawRectangle(GetScreenWidth()/2, GetScreenHeight()/2, GetScreenWidth()/(GetScreenWidth()/2), GetScreenHeight()/(GetScreenHeight()/2), WHITE);
             // Health / respawn HUD
             PlayerState *localP = &gameState.players[localSlot];
             if (localP->active) {

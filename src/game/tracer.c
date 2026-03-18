@@ -10,7 +10,7 @@
 
 #define MAX_TRACERS     64
 #define TRACER_LIFETIME 0.12f   // seconds until fully faded
-#define TRACER_WIDTH    0.02f   // visual thickness
+#define TRACER_WIDTH    0.08f   // visual thickness
 
 typedef struct {
     Vector3 origin;

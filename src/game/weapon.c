@@ -18,7 +18,7 @@
 
 const WeaponDef weapons[WEAPON_COUNT] = {
     [WEAPON_SHOTGUN] = {
-        .name         = "Shotgun",
+        .name         = "SMG",
         .shape        = WSHAPE_BOX,
         .bodyColor    = { 60,  60,  60,  255 },   // dark grey body
         .accentColor  = { 30,  30,  30,  255 },   // near-black barrel
@@ -27,10 +27,10 @@ const WeaponDef weapons[WEAPON_COUNT] = {
         .bodyHeight   = 0.05f,   // vertical thickness
         .barrelLength = 0.12f,
         .barrelRadius = 0.014f,
-        .fireRate     = 0.2f,
-        .damage       = 8,
-        .spread       = 0.01f,
-        .pellets      = 8,
+        .fireRate     = 0.1f,
+        .damage       = 10,
+        .spread       = 0.0f,
+        .pellets      = 1,
         .range        = 30.0f,
         .screenShake  = 0.12f,
         .recoilPitch  = 0.03f,

@@ -42,7 +42,7 @@
 // Lightmap atlas — shared between editor and game
 // ─────────────────────────────────────────────────────────────
 
-#define LIGHTMAP_SIZE             512
+#define LIGHTMAP_SIZE             1024
 #define LIGHTMAP_LUXELS_PER_UNIT  4.0f
 
 typedef struct {
