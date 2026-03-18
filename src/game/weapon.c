@@ -30,9 +30,9 @@ const WeaponDef weapons[WEAPON_COUNT] = {
         .fireRate     = 0.1f,
         .damage       = 10,
         .spread       = 0.0f,
-        .pellets      = 1,
+        .pellets      = 8,
         .range        = 30.0f,
-        .screenShake  = 0.12f,
+        .screenShake  = 0.06f,
         .recoilPitch  = 0.03f,
     },
     [WEAPON_ROCKET] = {
@@ -421,6 +421,7 @@ bool WeaponTryFire(int shooterSlot, float dt) {
 
         // Spawn one tracer per pellet on the host
         TracerSpawn(muzzle, pelletEnd, pelletHit >= 0);
+        if (pelletHit >= 0) AudioPlayHit();
 
         // Broadcast tracer to clients
         HitMsg hit = {
