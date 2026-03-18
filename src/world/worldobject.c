@@ -52,10 +52,8 @@ bool IsSphereInFrustum(Vector3 center, float radius) {
 // Globals
 // ─────────────────────────────────────────────────────────────
 
-#ifdef _ARCHPC
 static Shader lightShader;
-static int lightCountLoc, ambientLoc, viewPosLoc, fogStartLoc, fogEndLoc, fogColorLoc;
-#endif
+static int lightCountLoc, ambientLoc, viewPosLoc;
 
 static float globalAmbientR = 0.2f;
 static float globalAmbientG = 0.2f;
@@ -115,12 +113,10 @@ static Texture2D GetOrLoadTexture(const char *path) {
 
 void SetGlobalAmbient(float r, float g, float b) {
     globalAmbientR = r; globalAmbientG = g; globalAmbientB = b;
-#ifdef _ARCHPC
     if (lightShader.id != 0) {
         float a[4] = { r, g, b, 1.0f };
         SetShaderValue(lightShader, ambientLoc, a, SHADER_UNIFORM_VEC4);
     }
-#endif
 }
 
 void AddWorldLight(Vector3 pos, Color color) {
@@ -414,17 +410,11 @@ static Model GenerateBrushModel(Vector3 scale, float texScale, const char *textu
 
     if (texturePath && texturePath[0] != '\0') {
         char fullTexPath[256];
-#ifdef _ARCHDREAM
-        snprintf(fullTexPath, sizeof(fullTexPath), "/cd/%s", texturePath);
-#else
         snprintf(fullTexPath, sizeof(fullTexPath), "%s", texturePath);
-#endif
         Texture2D tex = GetOrLoadTexture(fullTexPath);
         if (tex.id != 0) model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = tex;
     }
-#ifdef _ARCHPC
     if (lightShader.id != 0) model.materials[0].shader = lightShader;
-#endif
     return model;
 }
 
@@ -457,16 +447,61 @@ void AddBrushObject(Vector3 pos, Vector3 rotation, Vector3 scale,
 
 float GetGroundHeight(Vector3 playerPos) {
     if (!isLevelLoaded) return spawnPoint.y;
-    float groundY = -1000.0f, feetY = playerPos.y - playerHeight;
+
+    float groundY = -1000.0f;
+    float feetY   = playerPos.y - playerHeight;
+    // Only accept surfaces within this distance below the player's feet.
+    // This is the same step-up limit as the original AABB version:
+    //   limit = feetY + 1.2  =>  surface must be <= 1.2 units above feet.
+    // Expressed as a downward ray distance from playerPos.y:
+    //   min ray dist = playerHeight - 1.2  (surface just above feet)
+    //   max ray dist = playerHeight + 0.2  (just below feet, step-down)
+    // Accept a surface as ground only if surfaceY <= feetY + 1.2.
+    // This is identical to the original AABB limit — it allows step-ups
+    // but rejects surfaces above the player's feet (ceiling, mid-air).
+    float stepLimit = (framesSinceLoad < 60) ? feetY + 0.5f : feetY + 1.2f;
+
+    Ray downRay = {
+        .position  = { playerPos.x, playerPos.y, playerPos.z },
+        .direction = { 0.0f, -1.0f, 0.0f }
+    };
+
     for (int i = 0; i < objectCount; i++) {
         WorldObject *o = &levelObjects[i];
         if (!o->active) continue;
-        if (playerPos.x >= o->bb.min.x && playerPos.x <= o->bb.max.x &&
-            playerPos.z >= o->bb.min.z && playerPos.z <= o->bb.max.z) {
-            float limit = (framesSinceLoad < 60) ? feetY + 0.5f : feetY + 1.2f;
-            if (o->bb.max.y <= limit && o->bb.max.y > groundY) groundY = o->bb.max.y;
+
+        // XZ pre-filter
+        if (playerPos.x < o->bb.min.x - playerRadius ||
+            playerPos.x > o->bb.max.x + playerRadius ||
+            playerPos.z < o->bb.min.z - playerRadius ||
+            playerPos.z > o->bb.max.z + playerRadius) continue;
+
+        float surfaceY;
+
+        if (o->useMeshCollision) {
+            float bestDist = 1e6f;
+            bool  found    = false;
+            Model m = modelCache[o->modelId].model;
+            for (int mm = 0; mm < m.meshCount; mm++) {
+                RayCollision rc = GetRayCollisionMesh(downRay, m.meshes[mm], o->transform);
+                if (rc.hit && rc.distance < bestDist) {
+                    bestDist = rc.distance;
+                    found    = true;
+                }
+            }
+            if (!found) continue;
+            surfaceY = playerPos.y - bestDist;
+        } else {
+            if (playerPos.x < o->bb.min.x || playerPos.x > o->bb.max.x ||
+                playerPos.z < o->bb.min.z || playerPos.z > o->bb.max.z) continue;
+            surfaceY = o->bb.max.y;
         }
+
+        // Same limit as original: only ground if surface is at or below step threshold
+        if (surfaceY > stepLimit) continue;
+        if (surfaceY > groundY) groundY = surfaceY;
     }
+
     if (framesSinceLoad < 61) framesSinceLoad++;
     return (groundY == -1000.0f) ? feetY : groundY;
 }
@@ -510,15 +545,9 @@ void DrawWorld(void) {
     ExtractFrustumPlanes();
     Matrix  invView = MatrixInvert(rlGetMatrixModelview());
     Vector3 camPos  = { invView.m12, invView.m13, invView.m14 };
-    float   maxDist = 14.0f, maxDistSq = maxDist * maxDist;
 
-#ifdef _ARCHPC
     BeginShaderMode(lightShader);
-    float fogStart = 8.0f, fogEnd = 14.0f, fogCol[4] = { 0,0,0,1 };
-    SetShaderValue(lightShader, viewPosLoc,  &camPos,   SHADER_UNIFORM_VEC3);
-    SetShaderValue(lightShader, fogStartLoc, &fogStart, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(lightShader, fogEndLoc,   &fogEnd,   SHADER_UNIFORM_FLOAT);
-    SetShaderValue(lightShader, fogColorLoc,  fogCol,   SHADER_UNIFORM_VEC4);
+    SetShaderValue(lightShader, viewPosLoc, &camPos, SHADER_UNIFORM_VEC3);
 
     if (lightmapBaked) {
         float white[4] = { 1,1,1,1 }; int zero = 0;
@@ -526,8 +555,8 @@ void DrawWorld(void) {
         SetShaderValue(lightShader, lightCountLoc, &zero, SHADER_UNIFORM_INT);
     } else {
         float amb[4] = { globalAmbientR, globalAmbientG, globalAmbientB, 1.0f };
-        SetShaderValue(lightShader, ambientLoc,    amb,        SHADER_UNIFORM_VEC4);
-        SetShaderValue(lightShader, lightCountLoc, &lightCount, SHADER_UNIFORM_INT);
+        SetShaderValue(lightShader, ambientLoc,     amb,         SHADER_UNIFORM_VEC4);
+        SetShaderValue(lightShader, lightCountLoc, &lightCount,  SHADER_UNIFORM_INT);
         for (int i = 0; i < lightCount; i++) {
             char pn[32], cn[32];
             sprintf(pn, "lightPositions[%i]", i); sprintf(cn, "lightColors[%i]", i);
@@ -541,8 +570,6 @@ void DrawWorld(void) {
 
     for (int i = 0; i < objectCount; i++) {
         if (!levelObjects[i].active) continue;
-        Vector3 d = Vector3Subtract(camPos, levelObjects[i].pos);
-        if (d.x*d.x + d.y*d.y + d.z*d.z > maxDistSq) continue;
         if (!IsSphereInFrustum(levelObjects[i].center, levelObjects[i].radius)) continue;
         rlPushMatrix();
             rlMultMatrixf(MatrixToFloat(levelObjects[i].transform));
@@ -550,55 +577,6 @@ void DrawWorld(void) {
         rlPopMatrix();
     }
     EndShaderMode();
-
-#else
-    // ── Dreamcast: fixed-function with baked vertex colors ───
-    glEnable(GL_FOG);
-    float fogColor[] = { 0,0,0,1 };
-    glFogi(GL_FOG_MODE, GL_LINEAR);
-    glFogfv(GL_FOG_COLOR, fogColor);
-    glFogf(GL_FOG_START, 8.0f);
-    glFogf(GL_FOG_END,   14.0f);
-    glHint(GL_FOG_HINT,  GL_NICEST);
-
-    if (lightmapBaked) {
-        // Vertex colors (slot 3) hold baked lightmap, uploaded at mesh creation time.
-        // GL_COLOR_MATERIAL feeds them as the material color.
-        // GL_LIGHTING off means no attenuation — color is used as-is.
-        glDisable(GL_LIGHTING);
-        glEnable(GL_COLOR_MATERIAL);
-        glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
-    } else {
-        glEnable(GL_LIGHTING);
-        glEnable(GL_COLOR_MATERIAL);
-        float amb[] = { globalAmbientR, globalAmbientG, globalAmbientB, 1.0f };
-        glLightModelfv(GL_LIGHT_MODEL_AMBIENT, amb);
-        for (int i = 0; i < lightCount; i++) {
-            if (!levelLights[i].active) continue;
-            glEnable(levelLights[i].id);
-            float pos[] = { levelLights[i].pos.x, levelLights[i].pos.y, levelLights[i].pos.z, 1.0f };
-            float dif[] = { levelLights[i].diffuse.r/255.0f, levelLights[i].diffuse.g/255.0f,
-                            levelLights[i].diffuse.b/255.0f, 1.0f };
-            glLightfv(levelLights[i].id, GL_POSITION, pos);
-            glLightfv(levelLights[i].id, GL_DIFFUSE,  dif);
-        }
-    }
-
-    for (int i = 0; i < objectCount; i++) {
-        if (!levelObjects[i].active) continue;
-        Vector3 d = Vector3Subtract(camPos, levelObjects[i].pos);
-        if (d.x*d.x + d.y*d.y + d.z*d.z > maxDistSq) continue;
-        if (!IsSphereInFrustum(levelObjects[i].center, levelObjects[i].radius)) continue;
-        rlPushMatrix();
-            rlMultMatrixf(MatrixToFloat(levelObjects[i].transform));
-            DrawModel(modelCache[levelObjects[i].modelId].model, (Vector3){0,0,0}, 1.0f, WHITE);
-        rlPopMatrix();
-    }
-
-    glDisable(GL_COLOR_MATERIAL);
-    if (!lightmapBaked) glDisable(GL_LIGHTING);
-    glDisable(GL_FOG);
-#endif
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -611,10 +589,8 @@ int GetOrLoadModel(const char *path) {
     if (cachedModelCount < MAX_WORLD_OBJECTS) {
         modelCache[cachedModelCount].model = LoadModel(path);
         strcpy(modelCache[cachedModelCount].path, path);
-#ifdef _ARCHPC
         for (int m = 0; m < modelCache[cachedModelCount].model.materialCount; m++)
             modelCache[cachedModelCount].model.materials[m].shader = lightShader;
-#endif
         return cachedModelCount++;
     }
     return -1;
@@ -629,17 +605,12 @@ void LoadLevel(const char *fileName) {
     framesSinceLoad = 0;
     spawnPoint      = (Vector3){ 0, 1.0f, 0 };
 
-#ifdef _ARCHPC
     if (lightShader.id == 0) {
         lightShader   = LoadShader("assets/shaders/lighting.vs", "assets/shaders/lighting.fs");
         lightCountLoc = GetShaderLocation(lightShader, "lightCount");
         ambientLoc    = GetShaderLocation(lightShader, "ambientColor");
         viewPosLoc    = GetShaderLocation(lightShader, "viewPos");
-        fogStartLoc   = GetShaderLocation(lightShader, "fogStart");
-        fogEndLoc     = GetShaderLocation(lightShader, "fogEnd");
-        fogColorLoc   = GetShaderLocation(lightShader, "fogColor");
     }
-#endif
 
     // Load lightmap atlas BEFORE spawning brushes so colors are available
     // during mesh generation — avoids needing glBufferSubData (unreliable on KOS).
@@ -664,11 +635,7 @@ void LoadLevel(const char *fileName) {
             sscanf(line, "O %s %f %f %f %f %f %f %d",
                    modelPath, &pos.x, &pos.y, &pos.z, &rot.x, &rot.y, &rot.z, &meshFlag);
             char fullPath[256];
-#ifdef _ARCHDREAM
-            snprintf(fullPath, sizeof(fullPath), "/cd/%s", modelPath);
-#else
             snprintf(fullPath, sizeof(fullPath), "%s", modelPath);
-#endif
             int mIdx = GetOrLoadModel(fullPath);
             if (mIdx != -1) AddWorldObject(mIdx, pos, rot, (meshFlag == 1));
         }

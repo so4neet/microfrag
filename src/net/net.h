@@ -22,6 +22,8 @@
 // Button bitmask (sent in InputMsg)
 #define BTN_JUMP        (1 << 0)
 #define BTN_FIRE        (1 << 1)
+#define BTN_NEXT_WEP    (1 << 2)
+#define BTN_PREV_WEP    (1 << 3)
 
 // ─────────────────────────────────────────────────────────────
 // Message types
@@ -34,11 +36,13 @@ typedef enum {
     // Host → Client
     MSG_SNAPSHOT    = 2,
     MSG_EVENT       = 3,
+    MSG_HIT         = 7,    // hitscan fired — spawn tracer + impact fx
 
     // Handshake (reliable)
     MSG_JOIN_REQ    = 4,
-    MSG_JOIN_ACK    = 5,    // tells client their slot + map name
+    MSG_JOIN_ACK    = 5,
     MSG_DISCONNECT  = 6,
+    MSG_NAMES       = 8,    // host → client: full name table
 } MsgType;
 
 // ─────────────────────────────────────────────────────────────
@@ -63,6 +67,11 @@ typedef struct {
     float    x, y, z;
     float    yaw;
     int16_t  health;
+    uint8_t  weapon;
+    // Physics state — needed for client reconciliation
+    float    vx, vz;        // horizVel
+    float    vy;            // vertVelocity
+    uint8_t  grounded;
 } __attribute__((packed)) NetPlayer;
 
 // Host → All clients, CHAN_UNRELIABLE, at SNAPSHOT_HZ
@@ -79,6 +88,16 @@ typedef enum {
     EVENT_SPAWN  = 2,
     EVENT_DAMAGE = 3,
 } EventType;
+
+// Sent reliably host→all when a hitscan shot is fired.
+// Clients use this to draw tracers + impact fx.
+typedef struct {
+    uint8_t type;        // MSG_HIT
+    uint8_t shooter;     // player slot
+    float   ox, oy, oz;  // ray origin
+    float   hx, hy, hz;  // hit point (or far-plane point if miss)
+    uint8_t hit;         // 1 = hit a player, 0 = hit world/miss
+} __attribute__((packed)) HitMsg;
 
 typedef struct {
     uint8_t type;       // MSG_EVENT
@@ -99,6 +118,13 @@ typedef struct {
     uint8_t  type;          // MSG_JOIN_ACK
     uint8_t  slot;          // assigned player slot (1-7)
     char     mapName[64];   // level file path
+    char     names[MAX_PLAYERS][16];  // all current player names
 } __attribute__((packed)) JoinAckMsg;
+
+// Sent reliably to all clients when any player joins/leaves.
+typedef struct {
+    uint8_t  type;          // MSG_NAMES
+    char     names[MAX_PLAYERS][16];
+} __attribute__((packed)) NamesMsg;
 
 #endif // NET_H

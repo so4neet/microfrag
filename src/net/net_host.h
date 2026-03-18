@@ -1,6 +1,8 @@
 #ifndef NET_HOST_H
 #define NET_HOST_H
 
+#include <stddef.h>
+#include <stddef.h>
 #include <stdbool.h>
 #include "../net/net.h"
 
@@ -26,5 +28,8 @@ void HostBroadcastEvent(uint8_t eventType, uint8_t instigator,
                         uint8_t target, int16_t value);
 
 void HostShutdown(void);
+
+// Send a raw reliable packet to all connected clients.
+void HostBroadcastRaw(const void *data, size_t len, int channel);
 
 #endif // NET_HOST_H

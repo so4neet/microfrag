@@ -5,6 +5,8 @@
 #include "net.h"
 #include "../game/game_state.h"
 #include "../game/game_logic.h"
+#include "../game/weapon.h"
+#include "../audio/audio.h"
 
 static ENetHost *sHost    = NULL;
 static ENetPeer *sPeers[MAX_CLIENTS] = { 0 };  // sPeers[i] → slot i+1
@@ -87,12 +89,21 @@ static void HandleJoinReq(ENetPeer *peer, const uint8_t *data, size_t len) {
     strncpy(p->name, req->name, sizeof(p->name) - 1);
     RespawnPlayer(p);
 
-    // Send acknowledgement
+    // Send acknowledgement — include all current player names
     JoinAckMsg ack = { .type = MSG_JOIN_ACK, .slot = (uint8_t)slot };
     strncpy(ack.mapName, sMapName, sizeof(ack.mapName) - 1);
+    for (int s = 0; s < MAX_PLAYERS; s++)
+        strncpy(ack.names[s], gameState.players[s].name,
+                sizeof(ack.names[s]) - 1);
     SendReliable(peer, &ack, sizeof(ack));
 
     TraceLog(LOG_INFO, "HOST: '%s' joined as slot %d", p->name, slot);
+
+    // Broadcast updated name table to all existing clients
+    NamesMsg nm = { .type = MSG_NAMES };
+    for (int s = 0; s < MAX_PLAYERS; s++)
+        strncpy(nm.names[s], gameState.players[s].name, sizeof(nm.names[s]) - 1);
+    HostBroadcastRaw(&nm, sizeof(nm), CHAN_RELIABLE);
 
     // Announce spawn to everyone
     HostBroadcastEvent(EVENT_SPAWN, (uint8_t)slot, (uint8_t)slot, 100);
@@ -117,6 +128,16 @@ static void HandleInput(ENetPeer *peer, const uint8_t *data, size_t len) {
     // would buffer inputs and replay them in HostTick at a fixed timestep.
     // That's sufficient for a first pass.
     SimulatePlayer(p, msg, msg->dt);
+
+    // Weapon switch
+    if (msg->buttons & BTN_NEXT_WEP) WeaponCycleNext(slot);
+    if (msg->buttons & BTN_PREV_WEP) WeaponCyclePrev(slot);
+
+    // Tick cooldown and fire — slot 0 handled by player.c
+    if (slot > 0) {
+        WeaponTickCooldown(slot, msg->dt);
+        if (msg->buttons & BTN_FIRE) WeaponTryFire(slot, msg->dt);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -173,12 +194,24 @@ void HostPollNetwork(void) {
 // HostTick — authoritative sim for remote players
 // ─────────────────────────────────────────────────────────────
 
+#define RESPAWN_DELAY 3.0f
+
 void HostTick(float dt) {
-    // Input is applied in HandleInput() as it arrives.
-    // This tick handles anything not driven by inputs — projectiles, timers, etc.
-    // (Left as a stub for now; extend as gameplay features are added.)
-    (void)dt;
     gameState.tick++;
+
+    // Tick respawn timers for all players
+    for (int s = 0; s < MAX_PLAYERS; s++) {
+        PlayerState *p = &gameState.players[s];
+        if (!p->active && p->respawnTimer > 0.0f) {
+            p->respawnTimer -= dt;
+            if (p->respawnTimer <= 0.0f) {
+                RespawnPlayer(p);
+                HostBroadcastEvent(EVENT_SPAWN, (uint8_t)s, (uint8_t)s, 100);
+                AudioPlaySpawn(s == 0);
+                TraceLog(LOG_INFO, "HOST: player %d respawned", s);
+            }
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -199,12 +232,17 @@ void HostBroadcastSnapshot(void) {
 
     for (int s = 0; s < MAX_PLAYERS; s++) {
         PlayerState *p = &gameState.players[s];
-        snap.players[s].active = p->active ? 1 : 0;
-        snap.players[s].x      = p->pos.x;
-        snap.players[s].y      = p->pos.y;
-        snap.players[s].z      = p->pos.z;
-        snap.players[s].yaw    = p->yaw;
-        snap.players[s].health = (int16_t)p->health;
+        snap.players[s].active   = p->active ? 1 : 0;
+        snap.players[s].x        = p->pos.x;
+        snap.players[s].y        = p->pos.y;
+        snap.players[s].z        = p->pos.z;
+        snap.players[s].yaw      = p->yaw;
+        snap.players[s].health   = (int16_t)p->health;
+        snap.players[s].weapon   = p->weapon;
+        snap.players[s].vx       = p->horizVel.x;
+        snap.players[s].vz       = p->horizVel.z;
+        snap.players[s].vy       = p->vertVelocity;
+        snap.players[s].grounded = p->grounded ? 1 : 0;
     }
 
     // Send a personalised copy to each client (lastInputAck differs per peer)
@@ -219,6 +257,16 @@ void HostBroadcastSnapshot(void) {
 // ─────────────────────────────────────────────────────────────
 // HostBroadcastEvent
 // ─────────────────────────────────────────────────────────────
+
+void HostBroadcastRaw(const void *data, size_t len, int channel) {
+    if (!sHost) return;
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (!sPeers[i]) continue;
+        ENetPacket *pkt = enet_packet_create(data, len,
+            channel == CHAN_RELIABLE ? ENET_PACKET_FLAG_RELIABLE : 0);
+        enet_peer_send(sPeers[i], channel, pkt);
+    }
+}
 
 void HostBroadcastEvent(uint8_t eventType, uint8_t instigator,
                         uint8_t target, int16_t value) {

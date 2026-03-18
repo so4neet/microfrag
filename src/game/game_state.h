@@ -18,7 +18,12 @@ typedef struct {
     float    yaw;           // radians, horizontal look
     float    pitch;         // radians, vertical look
     float    vertVelocity;
+    Vector3  horizVel;      // horizontal velocity — persists across frames (Quake-style)
+    bool     jumpQueued;    // bhop: jump pressed this frame, applied at next ground touch
     int      health;
+    uint8_t  weapon;        // current weapon index
+    float    fireCooldown;  // seconds until next shot allowed
+    float    respawnTimer;  // > 0 means dead, counting down to respawn
     uint32_t lastInputSeq;  // highest InputMsg.sequence processed
     char     name[16];
 } PlayerState;

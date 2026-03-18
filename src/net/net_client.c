@@ -3,10 +3,13 @@
 #include <raylib.h>
 #include "net_client.h"
 #include "net.h"
-#include "../player/player.h"
-#include "../world/worldobject.h"
 #include "../game/game_state.h"
 #include "../game/game_logic.h"
+#include "../player/player.h"
+#include "../world/worldobject.h"
+#include "../game/tracer.h"
+#include "../audio/audio.h"
+#include "../game/weapon.h"
 
 static ENetHost *sClient    = NULL;
 static ENetPeer *sServer    = NULL;
@@ -164,6 +167,11 @@ bool ClientConnect(const char *hostAddr, uint16_t port, const char *playerName) 
                     TraceLog(LOG_INFO, "CLIENT: assigned slot %d, map=%s",
                              localSlot, ack->mapName);
 
+                    // Apply all player names from the ack
+                    for (int s = 0; s < MAX_PLAYERS; s++)
+                        strncpy(gameState.players[s].name, ack->names[s],
+                                sizeof(gameState.players[s].name) - 1);
+
                     // Load the level the server specified
                     LoadLevel(ack->mapName);
                     InitCamera();
@@ -198,27 +206,22 @@ bool ClientIsConnected(void) { return sConnected; }
 // Rewinds local player to the server's authoritative position, then
 // replays all inputs the server hasn't processed yet.
 static void Reconcile(const SnapshotMsg *snap) {
-    uint32_t ack = snap->lastInputAck;
-    if (ack <= sLastAcked) return; // nothing new
-    sLastAcked = ack;
-
     const NetPlayer *np = &snap->players[localSlot];
     PlayerState *local  = &gameState.players[localSlot];
 
-    // Reset to server-confirmed position
-    local->pos.x = np->x;
-    local->pos.y = np->y;
-    local->pos.z = np->z;
-    local->yaw   = np->yaw;
-    local->health = np->health;
-
-    // Replay inputs the server hasn't acked yet
-    for (uint32_t seq = ack + 1; seq < sNextSeq; seq++) {
-        PredictedInput *pi = &sHistory[seq % INPUT_HISTORY];
-        if (pi->msg.sequence == seq) {
-            SimulatePlayer(local, &pi->msg, pi->msg.dt);
-        }
-    }
+    // Directly apply server state every snapshot.
+    local->pos.x        = np->x;
+    local->pos.y        = np->y;
+    local->pos.z        = np->z;
+    local->yaw          = np->yaw;
+    local->health       = np->health;
+    local->weapon       = np->weapon;
+    local->horizVel.x   = np->vx;
+    local->horizVel.y   = 0.0f;
+    local->horizVel.z   = np->vz;
+    local->vertVelocity = np->vy;
+    local->grounded     = np->grounded != 0;
+    local->active       = np->active != 0;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -251,6 +254,7 @@ void ClientPollNetwork(void) {
 
                     p->active = np->active;
                     p->health = np->health;
+                    p->weapon = np->weapon;
 
                     if (np->active)
                         InterpPush(s, (Vector3){ np->x, np->y, np->z }, np->yaw, now);
@@ -260,13 +264,49 @@ void ClientPollNetwork(void) {
                 Reconcile(snap);
                 break;
             }
+            case MSG_NAMES: {
+                if (len < sizeof(NamesMsg)) break;
+                NamesMsg *nm = (NamesMsg *)data;
+                for (int s = 0; s < MAX_PLAYERS; s++)
+                    strncpy(gameState.players[s].name, nm->names[s],
+                            sizeof(gameState.players[s].name) - 1);
+                break;
+            }
+            case MSG_HIT: {
+                if (len < sizeof(HitMsg)) break;
+                HitMsg *hm = (HitMsg *)data;
+                Vector3 orig = { hm->ox, hm->oy, hm->oz };
+                Vector3 endp = { hm->hx, hm->hy, hm->hz };
+                TracerSpawn(orig, endp, hm->hit != 0);
+                // Shoot sound — skip for local player (already played immediately on fire)
+                if (hm->shooter != (uint8_t)localSlot)
+                    AudioPlayShoot(gameState.players[hm->shooter].weapon);
+                if (hm->hit) AudioPlayHit();
+                // Screen shake for the shooter
+                if (hm->shooter == (uint8_t)localSlot) {
+                    const WeaponDef *wep = &weapons[localSlot < MAX_PLAYERS ?
+                                           gameState.players[localSlot].weapon : 0];
+                    ShakeAdd(wep->screenShake);
+                }
+                break;
+            }
             case MSG_EVENT: {
                 if (len < sizeof(EventMsg)) break;
                 EventMsg *ev = (EventMsg *)data;
-                // TODO: hook into HUD/kill feed
                 if (ev->eventType == EVENT_FRAG) {
                     TraceLog(LOG_INFO, "CLIENT: player %d fragged player %d",
                              ev->instigator, ev->target);
+                    gameState.players[ev->target].active       = false;
+                    gameState.players[ev->target].respawnTimer = 3.0f;
+                    AudioPlayDeath(ev->target == (uint8_t)localSlot);
+                } else if (ev->eventType == EVENT_SPAWN) {
+                    gameState.players[ev->instigator].active = true;
+                    gameState.players[ev->instigator].health = ev->value;
+                    AudioPlaySpawn(ev->instigator == (uint8_t)localSlot);
+                } else if (ev->eventType == EVENT_DAMAGE &&
+                           ev->target == (uint8_t)localSlot) {
+                    ShakeAdd(0.05f);
+                    AudioPlayHit();
                 }
                 break;
             }
@@ -307,12 +347,9 @@ void ClientSendInput(float forwardAxis, float sideAxis,
         .dt          = dt,
     };
 
-    // Save to history for reconciliation
-    PredictedInput *pi = &sHistory[sNextSeq % INPUT_HISTORY];
-    pi->msg         = msg;
-    pi->stateBefore = gameState.players[localSlot];
-
-    // Predict locally using actual frame dt, not a fixed timestep
+    // Run local prediction so the camera moves smoothly between server snapshots.
+    // Reconcile() will snap back to server state each time a snapshot arrives,
+    // so this only affects display smoothness, not authoritative position.
     SimulatePlayer(&gameState.players[localSlot], &msg, dt);
 
     sNextSeq++;

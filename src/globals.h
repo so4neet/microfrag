@@ -5,7 +5,27 @@
 
 #define APPENDPATH(path) path
 
-#define moveSpeed           2.0f
+// ─────────────────────────────────────────────────────────────
+// Quake-style movement tuning
+// ─────────────────────────────────────────────────────────────
+
+// Top speed on the ground (units/sec)
+#define moveSpeed           6.0f
+
+// Ground acceleration — how fast you reach moveSpeed when grounded
+// Quake used 10, higher = snappier
+#define groundAccel         10.0f
+
+// Air acceleration — kept low so air-strafing is skillful, not free
+// Quake used 1, CPM/CPMA raised this for trickier movement
+#define airAccel            4.0f
+
+// Ground friction — how fast you decelerate when no input is held
+// Quake used 4, lower = icier
+#define friction            6.0f
+
+// Maximum horizontal speed bhop can build up to (0 = no cap)
+#define maxBhopSpeed        30.0f
 #define lookSpeed           0.05f
 #define gravity             6.6f
 #define jumpForce           2.6f
